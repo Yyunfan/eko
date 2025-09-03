@@ -1,5 +1,80 @@
 // @ts-nocheck
 export function run_build_dom_tree() {
+  const DOM_CACHE = {
+    boundingRects: new WeakMap<Element, DOMRect>(),
+    clientRects: new WeakMap<Element, DOMRectList>(),
+    computedStyles: new WeakMap<Element, CSSStyleDeclaration>(),
+    clearCache: () => {
+      DOM_CACHE.boundingRects = new WeakMap();
+      DOM_CACHE.clientRects = new WeakMap();
+      DOM_CACHE.computedStyles = new WeakMap();
+    }
+  };
+
+  const xpathCache = new WeakMap<Element, string>();
+
+  /**
+   * Gets the cached bounding rect for an element.
+   */
+  function getCachedBoundingRect(element: Element): DOMRect | null {
+    if (!element) return null;
+
+    if (DOM_CACHE.boundingRects.has(element)) {
+      return DOM_CACHE.boundingRects.get(element)!;
+    }
+
+    try {
+      const rect = element.getBoundingClientRect();
+      if (rect && (rect.width > 0 || rect.height > 0)) {
+        DOM_CACHE.boundingRects.set(element, rect);
+      }
+      return rect;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Gets the cached computed style for an element.
+   */
+  function getCachedComputedStyle(element: Element): CSSStyleDeclaration | null {
+    if (!element) return null;
+
+    if (DOM_CACHE.computedStyles.has(element)) {
+      return DOM_CACHE.computedStyles.get(element)!;
+    }
+
+    try {
+      const style = window.getComputedStyle(element as HTMLElement);
+      if (style) {
+        DOM_CACHE.computedStyles.set(element, style);
+      }
+      return style;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Gets the cached client rects for an element.
+   */
+  function getCachedClientRects(element: Element): DOMRectList | null {
+    if (!element) return null;
+
+    if (DOM_CACHE.clientRects.has(element)) {
+      return DOM_CACHE.clientRects.get(element)!;
+    }
+
+    try {
+      const rects = element.getClientRects();
+      if (rects && rects.length > 0) {
+        DOM_CACHE.clientRects.set(element, rects);
+      }
+      return rects;
+    } catch (e) {
+      return null;
+    }
+  }
   /**
    * Get clickable elements on the page
    *
@@ -218,7 +293,7 @@ export function run_build_dom_tree() {
       overlay.style.boxSizing = 'border-box';
 
       // Position overlay based on element
-      const rect = element.getBoundingClientRect();
+      const rect = getCachedBoundingRect(element);
       let top = rect.top;
       let left = rect.left;
 
@@ -284,8 +359,12 @@ export function run_build_dom_tree() {
       return index + 1;
     }
 
-    // Helper function to generate XPath as a tree
+    // Helper function to generate XPath as a tree with caching
     function getXPathTree(element, stopAtBoundary = true) {
+      if (xpathCache.has(element)) {
+        return xpathCache.get(element)!;
+      }
+
       const segments = [];
       let currentElement = element;
 
@@ -318,7 +397,9 @@ export function run_build_dom_tree() {
         currentElement = currentElement.parentNode;
       }
 
-      return segments.join('/');
+      const result = segments.join('/');
+      xpathCache.set(element, result);
+      return result;
     }
 
     // Helper function to check if element is accepted
@@ -399,7 +480,7 @@ export function run_build_dom_tree() {
       if (hasInteractiveRole) return true;
 
       // Get computed style
-      const style = window.getComputedStyle(element);
+      const style = getCachedComputedStyle(element);
 
       // Check if element has click-like styling
       // const hasClickStyling = style.cursor === 'pointer' ||
@@ -473,7 +554,7 @@ export function run_build_dom_tree() {
       const isFormRelated =
         element.form !== undefined ||
         element.hasAttribute('contenteditable') ||
-        style.userSelect !== 'none';
+        (style && style.userSelect !== 'none');
 
       // Check if element is draggable
       const isDraggable = element.draggable || element.getAttribute('draggable') === 'true';
@@ -490,12 +571,17 @@ export function run_build_dom_tree() {
 
     // Helper function to check if element is visible
     function isElementVisible(element) {
-      const style = window.getComputedStyle(element);
+      if (!element) return false;
+
+      // Quick check first - avoid expensive style computation if element has no size
+      if (element.offsetWidth === 0 && element.offsetHeight === 0) {
+        return false;
+      }
+
+      const style = getCachedComputedStyle(element);
       return (
-        element.offsetWidth > 0 &&
-        element.offsetHeight > 0 &&
-        style.visibility !== 'hidden' &&
-        style.display !== 'none'
+        style?.visibility !== 'hidden' &&
+        style?.display !== 'none'
       );
     }
 
@@ -670,7 +756,13 @@ export function run_build_dom_tree() {
 
       return nodeData;
     }
-    return buildDomTree(document.body);
+    try {
+      const result = buildDomTree(document.body);
+      return result;
+    } finally {
+      DOM_CACHE.clearCache();
+      xpathCache.clear?.();
+    }
   }
 
   window.get_clickable_elements = get_clickable_elements;
